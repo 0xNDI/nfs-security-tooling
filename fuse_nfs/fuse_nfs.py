@@ -14,7 +14,7 @@ import stat
 import logging
 import errno
 import pyfuse3
-import pyfuse3_asyncio
+import pyfuse3.asyncio
 from collections import namedtuple
 import datetime
 
@@ -33,7 +33,7 @@ else:
     faulthandler.enable()
 
 log = logging.getLogger(__name__)
-pyfuse3_asyncio.enable()
+pyfuse3.asyncio.enable()
 
 DirCacheEntry = namedtuple("DirCacheEntry", ["name", "last_update", "items"])
 
