@@ -21,6 +21,7 @@ import datetime
 import anfs
 
 from anfs.protocol.rpc.messages import AUTH_SYS
+from anfs.protocol.portmap.messages import ipproto
 from anfs.protocol.nfs3.messages import FILE_SYNC, GUARDED
 from anfs.protocol.nfs3.client import NFSv3Client, NFSFileEntry
 from anfs.protocol.nfs3.common.factory import NFS3ConnectionFactory
@@ -102,6 +103,7 @@ class FuseNFS(pyfuse3.Operations):
         self.nfs = None
 
         self.dir_cache_lock = asyncio.Lock()
+        self.mount_init_lock = asyncio.Lock()
         self.dir_cache = DirCache()
 
         self.dirs = dict()
@@ -115,10 +117,34 @@ class FuseNFS(pyfuse3.Operations):
     
     async def init_mount(self):
         if self.root_fh == None:
-            await self.mount_export()
+            async with self.mount_init_lock:
+                if self.root_fh == None:
+                    await self.mount_export()
+
+    async def resolve_mountd_port(self):
+        if self.mount_port != None:
+            return
+        portmap = self.mount_conn_factory.get_portmap()
+        connect_result = await portmap.connect()
+        if connect_result[0] == False:
+            log.error(f"Error connecting to Portmap: {connect_result[1]}")
+            exit(1)
+        port, err = await portmap.getport(100005, 3, ipproto.IPPROTO_TCP.value)
+        await portmap.disconnect()
+        if err is not None:
+            log.error(f"Error resolving Mountd port: {err}")
+            exit(1)
+        if port == 0:
+            log.error("Error resolving Mountd port: rpcbind returned port 0 for MOUNT v3")
+            exit(1)
+        self.mount_port = port
+        self.mount_conn_factory = NFS3ConnectionFactory.from_url(f"nfs://{self.host}:{self.mount_port}/?privport={0 if self.unprivileged_port else 1}")
+        self.mount_conn_factory.credential = AUTH_SYS(0, "b", self.uid, self.gid, [1001])
+        self.mount = self.mount_conn_factory.get_mount()
     
     async def mount_export(self):
         if self.export != None:
+            await self.resolve_mountd_port()
             connect_result = await self.mount.connect()
             if connect_result[0] == False:
                 log.error(f"Error connecting to Portmap/Mountd: {connect_result[1]}")
